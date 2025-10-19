@@ -1,0 +1,26 @@
+﻿<Window x:Class="GraphLongYValueIssue.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:ScottPlot="clr-namespace:ScottPlot.WPF;assembly=ScottPlot.WPF"
+        mc:Ignorable="d"
+        Title="MainWindow" Height="600" Width="400">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="5*" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <ScottPlot:WpfPlot Grid.Row="0" x:Name="WpfPlot" />
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Button Grid.Column="0" x:Name="Full" Content="Full" Margin="5" Click="Full_Click"/>
+            <Button Grid.Column="1" x:Name="Jump" Content="Jump" Margin="5" Click="Jump_Click"/>
+            <Button Grid.Column="2" x:Name="Slide" Content="Slide" Margin="5" Click="Slide_Click"/>
+        </Grid>
+    </Grid>
+</Window>
