@@ -71,23 +71,77 @@ namespace GraphLongYValueIssue
                                         }*/
                     #endregion
 
-                    switch (_SavedViewMode)
+                    if (!_suspendAutoView) // ★ 플래그로 멈춤 제어
                     {
-                        case ViewMode.Slide:
-                            CustomViewSlide();
-                            break;
-                        case ViewMode.Jump:
-                            CustomViewJump();
-                            break;
-                    }
+                        switch (_SavedViewMode)
+                        {
+                            case ViewMode.Slide:
+                                CustomViewSlide();
+                                break;
+                            case ViewMode.Jump:
+                                CustomViewJump();
+                                break;
+                        }
 
-                    GraphControl.Refresh();
+                        GraphControl.Refresh();
+                    }
                 }
             };
 
             AddNewDataTimer.Start();
             UpdatePlotTimer.Start();
         }
+
+        // 휠 핸들러 (의도 감지 후 X 관련이면 켜기)
+        private void GraphControl_PreviewMouseWheel0(object? sender, MouseWheelEventArgs e)
+        {
+            // ... 좌표/수치 계산 생략 ...
+            var p = e.GetPosition(GraphControl);
+            var mousePixel = new ScottPlot.Pixel(p.X, p.Y);
+            ScottPlot.Coordinates c = GraphControl.Plot.GetCoordinates(mousePixel);
+
+            bool ctrl = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
+            bool alt = Keyboard.Modifiers.HasFlag(ModifierKeys.Alt);
+            bool shift = Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
+
+            // 의도 판별 (기존 규칙 그대로 사용)
+            bool intentXScroll = shift;
+            bool intentXZoom = ctrl;
+            bool intentYZoom = !ctrl && (!USE_OPTION_2 || alt);
+            bool intentXYZoom = USE_OPTION_2 && !(ctrl || alt || shift);
+
+            if (intentXScroll)
+            {
+                PanX(GraphControl.Plot, (e.Delta > 0 ? -1 : 1) * 0.10);
+                BeginUserXOverride();
+                _suspendAutoView = true;               // ★ 자동 뷰 멈춤
+            }
+            else if (intentXZoom)
+            {
+                ZoomXAt(GraphControl.Plot, c.X, ZoomFactorFromDelta(e.Delta, 0.9));
+                BeginUserXOverride();
+                _suspendAutoView = true;               // ★
+            }
+            else if (intentXYZoom)
+            {
+                ZoomXAt(GraphControl.Plot, c.X, ZoomFactorFromDelta(e.Delta, 0.9));
+                ZoomYAt(GraphControl.Plot, c.Y, ZoomFactorFromDelta(e.Delta, 0.9));
+                BeginUserXOverride();
+                _suspendAutoView = true;               // ★
+            }
+            else if (intentYZoom)
+            {
+                ZoomYAt(GraphControl.Plot, c.Y, ZoomFactorFromDelta(e.Delta, 0.9));
+                // 필요시 Y만 변경 때도 멈추려면 다음 줄 추가
+                _suspendAutoView = true;
+            }
+
+            GraphControl.Refresh();
+            e.Handled = true;
+        }
+
+
+        private bool _suspendAutoView = false;
 
         private void InitGraphMouseEvent()
         {
@@ -102,7 +156,7 @@ namespace GraphLongYValueIssue
             // GraphControl.MouseWheel -= GraphControl_MouseWheel_NoUse;
 
             // 커스텀 휠 입력
-            GraphControl.PreviewMouseWheel += GraphControl_PreviewMouseWheel;
+            GraphControl.PreviewMouseWheel += GraphControl_PreviewMouseWheel0;
 
             // 포커스(키보드 조합 안정화)
             Loaded += (_, __) =>
@@ -323,6 +377,7 @@ namespace GraphLongYValueIssue
         {
             DisableMouseMoveLimit();
             _SavedViewMode = ViewMode.None;
+            _suspendAutoView = false; 
         }
 
         private void CustomJump_Click(object sender, RoutedEventArgs e)
