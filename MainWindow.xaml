@@ -8,12 +8,14 @@
         Title="MainWindow" Height="600" Width="400">
     <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="5*" />
+            <RowDefinition Height="10*" />
+            <RowDefinition Height="*" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
-        <ScottPlot:WpfPlot Grid.Row="0" x:Name="WpfPlot" />
+        <ScottPlot:WpfPlot Grid.Row="0" x:Name="GraphControl" />
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="*" />
@@ -21,6 +23,17 @@
             <Button Grid.Column="0" x:Name="Full" Content="Full" Margin="5" Click="Full_Click"/>
             <Button Grid.Column="1" x:Name="Jump" Content="Jump" Margin="5" Click="Jump_Click"/>
             <Button Grid.Column="2" x:Name="Slide" Content="Slide" Margin="5" Click="Slide_Click"/>
+            <Button Grid.Column="3" x:Name="Disable" Content="Disable" Margin="5" Click="Disable_Click"/>
+        </Grid>
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Button Grid.Column="1" x:Name="CustomJump" Content="CustomJump" Margin="5" Click="CustomJump_Click"/>
+            <Button Grid.Column="2" x:Name="CustomSlide" Content="CustomSlide" Margin="5" Click="CustomSlide_Click"/>
         </Grid>
     </Grid>
-</Window>
+</Window> 
