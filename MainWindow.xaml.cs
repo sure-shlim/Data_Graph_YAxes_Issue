@@ -1,4 +1,5 @@
 ﻿using System.Windows;
+using System.Windows.Input;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using ScottPlot;
@@ -17,6 +18,7 @@ namespace GraphLongYValueIssue
         long top = 422_212_465_065_982;
         private ViewMode _SavedViewMode;
 
+        private bool USE_OPTION_2 = false;
         private double _width = 1000;
 
         private List<DataLogger> _lines = new();
@@ -89,12 +91,216 @@ namespace GraphLongYValueIssue
 
         private void InitGraphMouseEvent()
         {
-            GraphControl.MouseWheel += (s, e) =>
+            // 내장 휠 줌 응답 제거(중복 방지)
+            GraphControl.UserInputProcessor.UserActionResponses.RemoveAll(r =>
+                r is ScottPlot.Interactivity.UserActionResponses.MouseWheelZoom);
+
+            // (필요 시) 모든 기본 마우스 동작을 완전히 끄고 싶으면 아래 주석을 해제
+            // GraphControl.UserInputProcessor.UserActionResponses.Clear();
+
+            // 기본 마우스 휠 핸들러 제거(있다면)
+            // GraphControl.MouseWheel -= GraphControl_MouseWheel_NoUse;
+
+            // 커스텀 휠 입력
+            GraphControl.PreviewMouseWheel += GraphControl_PreviewMouseWheel;
+
+            // 포커스(키보드 조합 안정화)
+            Loaded += (_, __) =>
             {
-                DisableMouseMoveLimit();
-                _SavedViewMode = ViewMode.None;
+                GraphControl.Focus();
+                // Plot.GetCoordinates 사용 시 첫 렌더를 보장하고 싶다면:
+                // GraphControl.Refresh();
             };
         }
+
+        // 혹시 기존에 연결되어 있던 핸들러가 있으면 비워두고 제거
+        private void GraphControl_MouseWheel_NoUse(object? s, MouseWheelEventArgs e) { }
+
+        #region Wheel helpers (커서 기준 X/Y 줌, X축 스크롤)
+        private static double ZoomFactorFromDelta(int delta, double step = 0.9)
+            => delta > 0 ? step : 1.0 / step; // 업: 확대, 다운: 축소
+
+        private static void ZoomXAt(ScottPlot.Plot plot, double x, double factor)
+        {
+            var ax = plot.Axes.Bottom;
+            double min = ax.Min, max = ax.Max, span = max - min;
+            if (span <= 0) return;
+
+            double t = (x - min) / span;
+            double newSpan = span * factor;   // factor<1 확대, >1 축소
+            ax.Min = x - newSpan * t;
+            ax.Max = x + newSpan * (1 - t);
+        }
+
+        private static void ZoomYAt(ScottPlot.Plot plot, double y, double factor)
+        {
+            var ay = plot.Axes.Left;
+            double min = ay.Min, max = ay.Max, span = max - min;
+            if (span <= 0) return;
+
+            double t = (y - min) / span;
+            double newSpan = span * factor;
+            ay.Min = y - newSpan * t;
+            ay.Max = y + newSpan * (1 - t);
+        }
+
+        private static void PanX(ScottPlot.Plot plot, double fraction)
+        {
+            var ax = plot.Axes.Bottom;
+            double span = ax.Max - ax.Min;
+            double dx = span * fraction;
+            ax.Min += dx;
+            ax.Max += dx;
+        }
+        #endregion
+
+        #region Wheel handler (1안/2안 적용)
+
+        // MainWindow 필드
+        private DateTime _userXOverrideUntil = DateTime.MinValue;
+        private double? _pinnedLeft = null;               // 사용자 조작 직후 고정할 Left
+        private readonly TimeSpan _pinDuration = TimeSpan.FromMilliseconds(50);
+        private const double _minSpan = 1e-9;             // 0폭 방지용 최소 폭
+        private void BeginUserXOverride()
+        {
+            _userXOverrideUntil = DateTime.UtcNow + _pinDuration;
+
+            var lim = GraphControl.Plot.Axes.GetLimits();
+            _pinnedLeft = lim.Left;
+
+            _width = lim.Right - lim.Left;
+            if (_width < _minSpan) _width = _minSpan;   // ★ 추가
+
+            Logger1.ManageAxisLimits = false;
+            Logger2.ManageAxisLimits = false;
+        }
+
+        private bool IsUserXOverrideActive()
+            => DateTime.UtcNow <= _userXOverrideUntil && _pinnedLeft.HasValue;
+
+        // (선택) 핀이 끝났다면 해제
+        private void MaybeClearPin()
+        {
+            if (!IsUserXOverrideActive())
+                _pinnedLeft = null;
+        }
+
+
+        private void GraphControl_PreviewMouseWheel(object? sender, MouseWheelEventArgs e)
+        {
+            // ① 더 이상 모드 해제(자유 모드 전환)하지 않음
+            // _SavedViewMode = ViewMode.None;        // ← 삭제
+            // DisableMouseMoveLimit();               // ← 삭제 (Slide/Jump와 충돌)
+
+            // 커서의 픽셀 → 좌표
+            var p = e.GetPosition(GraphControl);
+            var mousePixel = new ScottPlot.Pixel(p.X, p.Y);
+            ScottPlot.Coordinates c = GraphControl.Plot.GetCoordinates(mousePixel);
+
+            bool ctrl = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
+            bool alt = Keyboard.Modifiers.HasFlag(ModifierKeys.Alt);
+            bool shift = Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
+
+            double factor = ZoomFactorFromDelta(e.Delta, 0.9);
+
+            // ② 현재 모드가 유지되는 전제에서, Slide/Jump일 때는 X축을 건드리지 않도록 권장
+            bool modeLocksX = _SavedViewMode is ViewMode.Slide or ViewMode.Jump;
+
+            if (shift)
+            {
+                // X축 팬
+                double dir = e.Delta > 0 ? -1 : 1;
+                PanX(GraphControl.Plot, dir * 0.10);
+                BeginUserXOverride();           // ★ 추가
+            }
+            else if (ctrl)
+            {
+                // X축 줌
+                ZoomXAt(GraphControl.Plot, c.X, factor);
+                BeginUserXOverride();           // ★ 추가
+            }
+            else
+            {
+                if (USE_OPTION_2)
+                {
+                    if (alt)
+                    {
+                        // Y만
+                        ZoomYAt(GraphControl.Plot, c.Y, factor);
+                    }
+                    else
+                    {
+                        // 기본: XY 동시 줌 → X도 바뀌므로 보호
+                        ZoomXAt(GraphControl.Plot, c.X, factor);
+                        ZoomYAt(GraphControl.Plot, c.Y, factor);
+                        BeginUserXOverride();   // ★ 추가
+                    }
+                }
+                else
+                {
+                    // 1안: 기본 Y만 → 보호 불필요
+                    ZoomYAt(GraphControl.Plot, c.Y, factor);
+                }
+            }
+
+            GraphControl.Refresh();
+            e.Handled = true;
+        }
+
+        private void GraphControl_PreviewMouseWheel2(object? sender, MouseWheelEventArgs e)
+        {
+            // 휠을 돌리면 자유 이동 모드로 전환
+            _SavedViewMode = ViewMode.None;
+            DisableMouseMoveLimit();
+
+            // 커서의 픽셀 → 좌표
+            var p = e.GetPosition(GraphControl);
+            var mousePixel = new ScottPlot.Pixel(p.X, p.Y);
+            ScottPlot.Coordinates c = GraphControl.Plot.GetCoordinates(mousePixel); // c.X, c.Y
+
+            bool ctrl = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
+            bool alt = Keyboard.Modifiers.HasFlag(ModifierKeys.Alt);
+            bool shift = Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
+
+            double factor = ZoomFactorFromDelta(e.Delta, 0.9);
+
+            if (shift)
+            {
+                // X축 스크롤(팬): 한 번에 현재 범위의 10% 이동
+                double dir = e.Delta > 0 ? -1 : 1; // 업: 왼쪽, 다운: 오른쪽
+                PanX(GraphControl.Plot, dir * 0.10);
+                // 필요 시: OnXAxisScrolled();
+            }
+            else if (ctrl)
+            {
+                // X축만 줌
+                ZoomXAt(GraphControl.Plot, c.X, factor);
+            }
+            else if (USE_OPTION_2 && alt)
+            {
+                // (2안일 때) Alt: Y축만 줌
+                ZoomYAt(GraphControl.Plot, c.Y, factor);
+            }
+            else
+            {
+                if (USE_OPTION_2)
+                {
+                    // 2안: 기본 = X·Y 동시 줌
+                    ZoomXAt(GraphControl.Plot, c.X, factor);
+                    ZoomYAt(GraphControl.Plot, c.Y, factor);
+                }
+                else
+                {
+                    // 1안: 기본 = Y축만 줌
+                    ZoomYAt(GraphControl.Plot, c.Y, factor);
+                }
+            }
+
+            GraphControl.Refresh();
+            e.Handled = true; // 내장 처리 방지
+        }
+
+        #endregion
 
         #region Default View Modes
         private void Full_Click(object sender, RoutedEventArgs e)
@@ -135,40 +341,6 @@ namespace GraphLongYValueIssue
 
         private static bool ShouldJump(double newestX, double currentRight, double marginX)
     => newestX > currentRight - marginX;
-
-        public void CustomViewSlide()
-        {
-            double leftLimit, rightLimit, xAxisLength;
-
-            lock (_lock)
-            {
-                xAxisLength = _width;
-                double maxX = double.NegativeInfinity;
-
-                foreach (var line in _lines)
-                {
-                    var last = line.Data.Coordinates.LastOrDefault();
-                    maxX = Math.Max(maxX, last.X);
-                }
-
-                if (double.IsNegativeInfinity(maxX))
-                    maxX = 0; // 라인이 비었을 때 대비
-
-                rightLimit = maxX;
-                leftLimit = rightLimit - xAxisLength;
-            }
-
-            // 2) UI 호출은 락 밖에서 디스패처로
-            // WPF:
-            _ = Application.Current.Dispatcher.InvokeAsync(() =>
-            {
-                var plot = GraphControl.Plot;
-                var limit = plot.Axes.GetLimits(); // UI 스레드에서
-                ZoomToRegion(plot, leftLimit, rightLimit, limit.Bottom, limit.Top);
-                GraphControl.Refresh(); // 필요 시
-            });
-        }
-
         public void CustomViewJump()
         {
             DisableMouseMoveLimit();
@@ -184,19 +356,80 @@ namespace GraphLongYValueIssue
             }
 
             const double paddingFraction = 0.5;
-            const double marginX = 0; // 필요하면 0.05 * width 등으로 여유를 둘 수 있음
+            const double marginX = 0;
 
             _ = Application.Current.Dispatcher.InvokeAsync(() =>
             {
                 var plot = GraphControl.Plot;
-                var cur = plot.Axes.GetLimits();
+                var cur = plot.Axes.GetLimits(); // Y 유지
 
-                if (ShouldJump(newestX, cur.Right, marginX))
+                // 점프 목표(기존 로직)
+                var (tLeft, tRight) = ComputeJumpWindow(newestX, width, paddingFraction);
+
+                double left, right;
+
+                if (IsUserXOverrideActive())
                 {
-                    var (leftLimit, rightLimit) = ComputeJumpWindow(newestX, width, paddingFraction);
-                    ZoomToRegion(plot, leftLimit, rightLimit, cur.Bottom, cur.Top);
-                    GraphControl.Refresh();
+                    // Left 고정 + "폭(_width) 그대로" 유지
+                    left = _pinnedLeft!.Value;
+                    right = Math.Max(left + _width, left + _minSpan);
                 }
+
+                else
+                {
+                    // ★ 평소 점프: 기존 규칙대로
+                    left = tLeft;
+                    right = tRight;
+                }
+
+                plot.Axes.SetLimits(left, right, cur.Bottom, cur.Top);
+                GraphControl.Refresh();
+
+                MaybeClearPin();
+            });
+        }
+
+        public void CustomViewSlide()
+        {
+            // 최신 X 계산
+            double maxX = double.NegativeInfinity;
+            lock (_lock)
+            {
+                foreach (var line in _lines)
+                {
+                    var last = line.Data.Coordinates.LastOrDefault();
+                    maxX = Math.Max(maxX, last.X);
+                }
+                if (double.IsNegativeInfinity(maxX))
+                    maxX = 0;
+            }
+
+            _ = Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                var plot = GraphControl.Plot;
+                var lim = plot.Axes.GetLimits(); // Y 유지
+
+                double left, right;
+
+                if (IsUserXOverrideActive())
+                {
+                    // Left 고정 + "폭(_width) 그대로" 유지 (축소/확대 모두 반영)
+                    left = _pinnedLeft!.Value;
+                    right = Math.Max(left + _width, left + _minSpan);
+                }
+
+                else
+                {
+                    // ★ 평소 슬라이드: 폭을 유지하고 오른쪽 끝이 최신 X
+                    right = maxX;
+                    left = right - _width;
+                }
+
+                plot.Axes.SetLimits(left, right, lim.Bottom, lim.Top);
+                GraphControl.Refresh();
+
+                // 핀 해제 시점이 되었는지 확인 (선택)
+                MaybeClearPin();
             });
         }
 
